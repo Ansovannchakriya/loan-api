@@ -4,7 +4,7 @@ A **FastAPI** service that predicts whether a loan application should be approve
 It is packaged as a **production-ready Docker image**, runs with **Docker Compose** next to PostgreSQL, and is published on **Docker Hub**.
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.143-009688?logo=fastapi&logoColor=white)
 ![scikit-learn](https://img.shields.io/badge/scikit--learn-1.6-F7931E?logo=scikitlearn&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
@@ -16,7 +16,7 @@ It is packaged as a **production-ready Docker image**, runs with **Docker Compos
 ### Run the published image (no local files needed)
 
 ```bash
-docker run --rm -p 8000:8000 DOCKER_USER/loan-api:1.0.0
+docker run --rm -p 8000:8000 sovannchakriya/loan-api:1.0.0
 ```
 
 Open **http://localhost:8000/docs**.
@@ -45,7 +45,19 @@ Stop everything with `docker compose down`.
 | `GET`  | `/health`  | Health status, used by the Docker `HEALTHCHECK` |
 | `POST` | `/predict` | Predicts approval for one loan application    |
 
-**Example request**
+**Example request body**
+
+```json
+{
+  "income": 3000,
+  "loan_amount": 2000,
+  "credit_score": 780,
+  "years_employed": 10,
+  "has_default": false
+}
+```
+
+Send it with curl:
 
 ```bash
 curl -X POST http://localhost:8000/predict \
@@ -56,7 +68,10 @@ curl -X POST http://localhost:8000/predict \
 **Example response**
 
 ```json
-{ "approved": true, "probability": 1.0 }
+{
+  "approved": true,
+  "probability": 1.0
+}
 ```
 
 | Field            | Type    | Rule                     |
