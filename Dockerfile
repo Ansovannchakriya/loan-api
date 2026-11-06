@@ -1,5 +1,6 @@
-# Development image: one stage, code reloads on change.
-FROM python:3.12-slim
+# Development image: one stage on the full Python image, code reloads on change.
+# Also used as the "full-Python variant" to compare sizes with Dockerfile.prod.
+FROM python:3.12
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

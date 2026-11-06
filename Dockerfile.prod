@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY train.py .
-RUN MODEL_PATH=/build/model/model.joblib python train.py
+RUN MODEL_PATH=/build/model/model.joblib MODEL_VERSION=1.0.0 python train.py
 
 # ---- Stage 2: runtime ----
 FROM python:3.12-slim
@@ -24,14 +24,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MODEL_PATH=/app/model/model.joblib
 
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system app && useradd --system --gid app --no-create-home app
+    && groupadd --system appuser && useradd --system --gid appuser --no-create-home appuser
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build/model ./model
 COPY main.py .
 
-USER app
+USER appuser
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \

@@ -22,7 +22,9 @@ GOOD = {"income": 3000, "loan_amount": 2000, "credit_score": 780, "years_employe
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok", "model_loaded": True}
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["model_version"] == "1.0.0"
 
 
 def test_predict_good_applicant(client):

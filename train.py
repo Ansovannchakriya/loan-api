@@ -1,4 +1,5 @@
-"""Train a small loan-approval model and save it to MODEL_PATH (default model/model.joblib)."""
+"""Train a small loan-approval model and save it to MODEL_PATH (default model/model.joblib).
+MODEL_VERSION (default 1.0.0) is saved with the model so /health can show it."""
 import os
 from pathlib import Path
 
@@ -31,8 +32,9 @@ def main():
     model.fit(X, y)
     path = Path(os.getenv("MODEL_PATH", "model/model.joblib"))
     path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, path)
-    print(f"Saved model to {path} (training accuracy {model.score(X, y):.3f})")
+    version = os.getenv("MODEL_VERSION", "1.0.0")
+    joblib.dump({"model": model, "version": version}, path)
+    print(f"Saved model {version} to {path} (training accuracy {model.score(X, y):.3f})")
 
 
 if __name__ == "__main__":

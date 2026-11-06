@@ -1,40 +1,118 @@
 # Checklist - loan-api
 
-Evidence for each requirement of the production image (`Dockerfile.prod`). I ran everything in PowerShell with Docker Desktop on 6 Nov 2026. I put the commands in `collect-evidence.ps1` so I could run them all at once.
+Evidence for each requirement in the lesson table. I ran everything in PowerShell with Docker Desktop on 6 Nov 2026. The commands are in `collect-evidence.ps1` so I could run them all at once.
 
-## 1. Slim base image and multi-stage build
+## 1. Multi-stage Dockerfile.prod: slim base, non-root user, HEALTHCHECK
 
-`Dockerfile.prod` has a `builder` stage that installs the packages and trains the model. The final stage starts from `python:3.12-slim` again and only copies `/opt/venv`, the model and `main.py`.
+`Dockerfile.prod` has two stages, both on `python:3.12-slim`. The `builder` stage installs the packages and trains the model, the final stage only copies the virtual environment, the model and `main.py`.
 
 ```powershell
-docker build -t loan-api:dev -f Dockerfile .
-docker build -t loan-api:prod -f Dockerfile.prod .
-docker images loan-api
+Select-String -Path Dockerfile.prod -Pattern "^FROM|^USER|^HEALTHCHECK"
 ```
 
 ```
-IMAGE           ID             DISK USAGE   CONTENT SIZE   EXTRA
-loan-api:dev    5d8eeb5b7301        589MB          138MB        
-loan-api:prod   dd08bf7f34f9        611MB          143MB
+Dockerfile.prod:4:FROM python:3.12-slim AS builder
+Dockerfile.prod:19:FROM python:3.12-slim
+Dockerfile.prod:34:USER appuser
+Dockerfile.prod:37:HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
 ```
 
-The two images are almost the same size. Most of the size is numpy, scipy and scikit-learn, which both need. The difference is what is inside: the prod image has no pytest, httpx, train.py or tests.
-
-## 2. Runs as a non-root user
+`whoami` prints `appuser`:
 
 ```powershell
 docker run --rm loan-api:prod whoami
-docker inspect --format '{{.Config.User}}' loan-api:prod
 ```
 
 ```
-app
-app
+appuser
 ```
 
-## 3. Health check in the image
+The health check (it calls `/health`) makes the container healthy:
 
-The `HEALTHCHECK` is in `Dockerfile.prod`, so I did not add one for `api` in `compose.yaml`.
+```powershell
+docker run -d --name hc-test loan-api:prod
+Start-Sleep 30
+docker ps --filter name=hc-test --format "{{.Names}}  {{.Status}}"
+```
+
+```
+hc-test  Up 30 seconds (healthy)
+```
+
+## 2. .dockerignore excludes Git, caches, local models and dev config
+
+```powershell
+Get-Content .dockerignore
+```
+
+```
+.git
+.github
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+tests
+model
+.env
+.env.*
+*.md
+compose.yaml
+init.sql
+Dockerfile*
+.dockerignore
+.devcontainer
+.vscode
+_to_delete
+collect-evidence.ps1
+evidence.txt
+models
+```
+
+- Git: `.git`, `.github`, `.gitignore`
+- caches: `__pycache__`, `*.pyc`, `.pytest_cache`, `.venv`, `venv`
+- local models: `model`, `models`
+- dev config: `.env`, `.env.*`, `.vscode`, `.devcontainer`, `compose.yaml`
+
+## 3. Model path configurable with MODEL_PATH
+
+`train.py` saves the model together with its version, and `/health` shows the version of the model that was loaded. The image has model 1.0.0 built in. I trained a 1.1.0 model into a local `models` folder:
+
+```powershell
+docker run --rm -v "${PWD}/models:/out" -e MODEL_PATH=/out/model-1.1.0.joblib -e MODEL_VERSION=1.1.0 loan-api:full python train.py
+```
+
+```
+Saved model 1.1.0 to /out/model-1.1.0.joblib (training accuracy 0.923)
+```
+
+Without `MODEL_PATH`, the built-in model is used:
+
+```powershell
+docker run -d --name m-default -p 8001:8000 loan-api:prod
+Invoke-RestMethod http://localhost:8001/health | ConvertTo-Json -Compress
+```
+
+```
+{"status":"ok","model_version":"1.0.0","model_path":"/app/model/model.joblib"}
+```
+
+With the 1.1.0 model mounted and `MODEL_PATH` pointing to it, `/health` shows 1.1.0:
+
+```powershell
+docker run -d --name m-110 -p 8002:8000 -v "${PWD}/models:/models:ro" -e MODEL_PATH=/models/model-1.1.0.joblib loan-api:prod
+Invoke-RestMethod http://localhost:8002/health | ConvertTo-Json -Compress
+```
+
+```
+{"status":"ok","model_version":"1.1.0","model_path":"/models/model-1.1.0.joblib"}
+```
+
+## 4. compose.yaml runs API + PostgreSQL + Adminer, API built from Dockerfile.prod
+
+In `compose.yaml` the `api` service has `build: context: .` and `dockerfile: Dockerfile.prod`.
 
 ```powershell
 docker compose up -d --build
@@ -44,95 +122,52 @@ docker compose ps
 
 ```
 NAME                 IMAGE                COMMAND                  SERVICE   CREATED          STATUS                    PORTS
-loan-api-adminer-1   adminer:4            "entrypoint.sh docke…"   adminer   55 minutes ago   Up 55 minutes             0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
-loan-api-api-1       loan-api-api         "uvicorn main:app --…"   api       40 seconds ago   Up 36 seconds (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
-loan-api-db-1        postgres:16-alpine   "docker-entrypoint.s…"   db        55 minutes ago   Up 55 minutes (healthy)   5432/tcp
+loan-api-adminer-1   adminer:4            "entrypoint.sh docke…"   adminer   42 seconds ago   Up 41 seconds             0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+loan-api-api-1       loan-api-api         "uvicorn main:app --…"   api       42 seconds ago   Up 35 seconds (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+loan-api-db-1        postgres:16-alpine   "docker-entrypoint.s…"   db        42 seconds ago   Up 41 seconds (healthy)   5432/tcp
 ```
 
-api and db are both healthy.
+All three are up and db is healthy (api too, from the image's health check).
 
-## 4. MODEL_PATH from an environment variable
+## 5. Image at least 40% smaller than the full-Python variant
 
-`main.py` reads `MODEL_PATH`, and the image sets it to `/app/model/model.joblib`.
+`Dockerfile` is the full-Python variant (`FROM python:3.12`), `Dockerfile.prod` is the slim multi-stage one.
 
 ```powershell
-docker inspect --format '{{json .Config.Env}}' loan-api:prod
+docker build -t loan-api:full -f Dockerfile .
+docker build -t loan-api:prod -f Dockerfile.prod .
+docker images loan-api
 ```
 
 ```
-["PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LANG=C.UTF-8","GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305","PYTHON_VERSION=3.12.15","PYTHON_SHA256=c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a","PYTHONDONTWRITEBYTECODE=1","PYTHONUNBUFFERED=1","MODEL_PATH=/app/model/model.joblib"]
+IMAGE           ID             DISK USAGE   CONTENT SIZE   EXTRA
+loan-api:full   1e29cae071ed       2.01GB          507MB        
+loan-api:prod   cd2797328f43        611MB          143MB
 ```
 
-To check that the variable is really used, I gave it a path that does not exist. The app does not start:
+611 MB vs 2.01 GB: the production image is about 70% smaller (content size 143 MB vs 507 MB, also about 72% smaller).
+
+## 6. No HIGH or CRITICAL findings without a note
 
 ```powershell
-docker run --name bad-path -e MODEL_PATH=/app/model/missing.joblib loan-api:prod
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --no-progress loan-api:prod
 ```
 
-```
-INFO:     Started server process [1]
- 
-INFO:     Waiting for application startup.
-ERROR:    Traceback (most recent call last):
-  File "/opt/venv/lib/python3.12/site-packages/starlette/routing.py", line 661, in lifespan
-    async with self.lifespan_context(app) as maybe_state:
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/contextlib.py", line 210, in __aenter__
-    return await anext(self.gen)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/app/main.py", line 19, in lifespan
-    state["model"] = joblib.load(MODEL_PATH)
-                     ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/venv/lib/python3.12/site-packages/joblib/numpy_pickle.py", line 650, in load
-    with open(filename, 'rb') as f:
-         ^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/app/model/missing.joblib'
+Result: Debian packages 49 HIGH, 0 CRITICAL. Python packages 0 HIGH, 0 CRITICAL.
 
-ERROR:    Application startup failed. Exiting.
-```
+Fixed: my first scan found 3 HIGH in starlette 0.41.3 (CVE-2025-62727, CVE-2026-48818, CVE-2026-54283). Starlette comes with FastAPI, so I upgraded FastAPI from 0.115.6 to 0.143.0, rebuilt and scanned again. The Python packages now have 0.
 
-(`GPG_KEY` comes from the official Python image. It is a public key, not a secret.)
+Not fixed yet: the other 49 are all in Debian packages from the `python:3.12-slim` base. Trivy shows no fixed version for any of them (status `affected`, and `fix_deferred` for perl). The image already runs `apt-get upgrade`, so I can only fix them by rebuilding after Debian releases the patches.
 
-## 5. Pinned dependencies
+- CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, CVE-2026-78410 - util-linux packages (bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux). No fix yet. These are mount/nsenter tools that the app does not use, and it runs as non-root.
+- CVE-2026-119373, CVE-2026-119374, CVE-2026-119379 - libsqlite3-0. No fix yet. The app uses PostgreSQL, not SQLite.
+- CVE-2026-16742 - libsystemd0, libudev1. No fix yet. It is about systemd-homed, which does not run in a container.
+- CVE-2025-69720 - ncurses (libncursesw6, libtinfo6, ncurses-base). No fix yet. Terminal library, not used by the API.
+- CVE-2026-54369 - libacl1. No fix yet. Needs local symlink access.
+- CVE-2026-76844, CVE-2026-85091 - zlib1g. No fix yet. Python needs zlib so it cannot be removed.
+- CVE-2026-9538 - perl-base. Debian deferred the fix. The app does not use Perl.
 
-```powershell
-Get-Content requirements.txt
-```
-
-```
-fastapi==0.143.0
-uvicorn==0.34.0
-scikit-learn==1.6.1
-joblib==1.4.2
-numpy==2.2.2
-psycopg[binary]==3.2.4
-```
-
-pytest and httpx are only in `requirements-dev.txt`. Searching for them in the image gives nothing:
-
-```powershell
-docker run --rm loan-api:prod pip list | Select-String -Pattern "pytest|httpx"
-```
-
-```
-(no output)
-```
-
-## 6. No secrets in the image or the repo
-
-`.dockerignore` keeps `.git`, `.env`, tests, caches and the compose/sql files out of the build. Only `main.py` and the model are in `/app`:
-
-```powershell
-docker run --rm loan-api:prod ls -la /app
-```
-
-```
-total 16
-drwxr-xr-x 1 root root 4096 Nov  6 10:16 .
-drwxr-xr-x 1 root root 4096 Nov  6 10:18 ..
--rwxr-xr-x 1 root root 2520 Nov  6 09:03 main.py
-drwxr-xr-x 2 root root 4096 Nov  6 10:16 model
-```
+No secrets in the image either:
 
 ```powershell
 docker history --no-trunc loan-api:prod | Select-String -Pattern "password|secret|token"
@@ -147,36 +182,13 @@ git grep -nIiE "password|secret|token"
 ```
 
 ```
-README.md:91:- **Pinned dependencies** and a strict `.dockerignore`, so no tests, caches or secrets go into the image.
 compose.yaml:9:      DATABASE_URL: postgresql://loan:loan_dev_password@db:5432/loans
 compose.yaml:18:      POSTGRES_PASSWORD: loan_dev_password   # development only
 ```
 
-The only password is the development database password in `compose.yaml`, which the task allows. The README line just has the word "secrets".
+The only password is the development database password in `compose.yaml`, which the task allows.
 
-## 7. Trivy scan
-
-```powershell
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --no-progress loan-api:prod
-```
-
-Result: Debian packages 49 HIGH, 0 CRITICAL. Python packages 0 HIGH, 0 CRITICAL.
-
-### Notes on the findings
-
-Fixed: my first scan found 3 HIGH in starlette 0.41.3 (CVE-2025-62727, CVE-2026-48818, CVE-2026-54283). Starlette comes with FastAPI, so I upgraded FastAPI from 0.115.6 to 0.143.0, rebuilt and scanned again. The Python packages now have 0.
-
-Not fixed yet: the other 49 are all in Debian packages from the `python:3.12-slim` base. Trivy shows no fixed version for any of them (status `affected`, and `fix_deferred` for perl). The image already runs `apt-get upgrade`, so I can only fix them by rebuilding after Debian releases the patches.
-
-- CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, CVE-2026-78410 - util-linux packages (bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux). No fix yet. These are mount/nsenter tools that the app does not use, and it runs as non-root.
-- CVE-2026-119373, CVE-2026-119374, CVE-2026-119379 - libsqlite3-0. No fix yet. The app uses PostgreSQL, not SQLite.
-- CVE-2026-16742 - libsystemd0, libudev1. No fix yet. It is about systemd-homed, which does not run in a container.
-- CVE-2025-69720 - ncurses (libncursesw6, libtinfo6, ncurses-base). No fix yet. Terminal library, not used by the API.
-- CVE-2026-54369 - libacl1. No fix yet. Needs local symlink access.
-- CVE-2026-76844, CVE-2026-85091 - zlib1g. No fix yet. Python needs zlib so it cannot be removed.
-- CVE-2026-9538 - perl-base. Debian deferred the fix. The app does not use Perl.
-
-## Publish to Docker Hub
+## 7. Image published as sovannchakriya/loan-api:1.0.0 and :latest
 
 ```powershell
 $DOCKER_USER="sovannchakriya"
@@ -188,7 +200,7 @@ docker push $DOCKER_USER/loan-api:latest
 
 Both tags are on https://hub.docker.com/r/sovannchakriya/loan-api/tags
 
-## Run from Docker Hub
+### Run from Docker Hub
 
 I deleted the local images and ran the one from Docker Hub:
 
@@ -202,17 +214,27 @@ docker run --rm -p 8000:8000 $DOCKER_USER/loan-api:1.0.0
 Unable to find image 'sovannchakriya/loan-api:1.0.0' locally
 1.0.0: Pulling from sovannchakriya/loan-api
 44136fa355b3: Already exists
-5332167ce62a: Download complete
-Digest: sha256:dd08bf7f34f9077f4c3ef3d4b381a6b8ba860c7362330074285d609a918f3bb1
+d44ad7cd37c6: Download complete
+Digest: sha256:cd2797328f43f2c0b4eef3edd3667239c34892b324d41eab0058d9f678263b51
 Status: Downloaded newer image for sovannchakriya/loan-api:1.0.0
 INFO:     Started server process [1]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:42214 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39198 - "GET /health HTTP/1.1" 200 OK
 ```
 
-The digest `dd08bf7f34f9` is the same ID as the `loan-api:prod` image I checked above, so the image on Docker Hub is the one that passed the checks. The `GET /health` lines are the health check.
+The digest `cd2797328f43` is the same ID as the `loan-api:prod` image I checked above, so the image on Docker Hub is the one that passed the checks. In a second terminal:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
+
+```
+status model_version model_path
+------ ------------- ----------
+ok     1.0.0         /app/model/model.joblib
+```
 
 Then I sent this to `POST /predict` in `/docs` and got 200:
 

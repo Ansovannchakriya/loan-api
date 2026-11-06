@@ -16,7 +16,9 @@ state = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    state["model"] = joblib.load(MODEL_PATH)
+    bundle = joblib.load(MODEL_PATH)
+    state["model"] = bundle["model"]
+    state["version"] = bundle["version"]
     yield
     state.clear()
 
@@ -57,7 +59,7 @@ def save_prediction(app_in: LoanApplication, result: Prediction):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": "model" in state}
+    return {"status": "ok", "model_version": state.get("version"), "model_path": MODEL_PATH}
 
 
 @app.post("/predict", response_model=Prediction)

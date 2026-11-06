@@ -26,7 +26,7 @@ Stop it with `docker compose down`.
 
 ## Endpoints
 
-- `GET /health` - returns the status, the Docker health check uses this
+- `GET /health` - returns the status and the model version, the Docker health check uses this
 - `POST /predict` - returns `approved` and `probability` for one application
 
 Example body for `/predict`:
@@ -54,18 +54,18 @@ Answer:
 
 ## Settings
 
-- `MODEL_PATH` - where the model file is. In the image it is `/app/model/model.joblib`.
+- `MODEL_PATH` - where the model file is. In the image it is `/app/model/model.joblib` (version 1.0.0). You can mount another model and point `MODEL_PATH` to it, `/health` then shows its version.
 - `DATABASE_URL` - optional. If it is set (Compose sets it), each prediction is saved in the `predictions` table.
 
 ## About the production image
 
-`Dockerfile.prod` uses two stages. The first stage installs the packages and trains the model, the second one only copies the virtual environment, the model and `main.py` into `python:3.12-slim`. It runs as a non-root user (`app`) and has a `HEALTHCHECK` that calls `/health`. The proof for each requirement is in [CHECKLIST.md](CHECKLIST.md).
+`Dockerfile.prod` uses two stages. The first stage installs the packages and trains the model, the second one only copies the virtual environment, the model and `main.py` into `python:3.12-slim`. It runs as a non-root user (`appuser`) and has a `HEALTHCHECK` that calls `/health`. It is about 70% smaller than the full-Python image. The proof for each requirement is in [CHECKLIST.md](CHECKLIST.md).
 
 ## Files
 
 - `main.py` - the API
 - `train.py` - trains the model (runs during the image build)
-- `Dockerfile` - image for development (auto reload)
+- `Dockerfile` - development image on the full `python:3.12` (auto reload), also used to compare sizes
 - `Dockerfile.prod` - image for production
 - `compose.yaml` - api, db and adminer
 - `init.sql` - creates the `predictions` table

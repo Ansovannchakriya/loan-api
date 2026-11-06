@@ -7,3 +7,4 @@ model/
 .env
 _to_delete/
 evidence.txt
+models/

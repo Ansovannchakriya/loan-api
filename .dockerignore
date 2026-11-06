@@ -20,3 +20,4 @@ Dockerfile*
 _to_delete
 collect-evidence.ps1
 evidence.txt
+models
