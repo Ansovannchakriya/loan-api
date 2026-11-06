@@ -1,24 +1,10 @@
-# Production checklist — loan-api
+# Checklist - loan-api
 
-Evidence that the production image built from `Dockerfile.prod` meets each requirement.
-All commands were run in PowerShell with Docker Desktop on 6 November 2026, from the repository root.
-The full raw output was produced by `collect-evidence.ps1`.
-
-| # | Requirement | Result |
-|---|-------------|--------|
-| 1 | Slim base image and multi-stage build | ✅ |
-| 2 | Runs as a non-root user | ✅ |
-| 3 | Health check built into the image | ✅ |
-| 4 | Configuration from environment variables (`MODEL_PATH`) | ✅ |
-| 5 | Pinned dependencies, no dev tools in the image | ✅ |
-| 6 | No secrets in the image or the repository; strict `.dockerignore` | ✅ |
-| 7 | Vulnerability scan with Trivy, findings handled | ✅ 0 CRITICAL; Python HIGH fixed; OS HIGH explained below |
-
----
+Evidence for each requirement of the production image (`Dockerfile.prod`). I ran everything in PowerShell with Docker Desktop on 6 Nov 2026. I put the commands in `collect-evidence.ps1` so I could run them all at once.
 
 ## 1. Slim base image and multi-stage build
 
-`Dockerfile.prod` has two stages. The `builder` stage creates a virtual environment, installs `requirements.txt` and trains the model. The final stage starts again from `python:3.12-slim` and copies only `/opt/venv`, the trained model and `main.py`. `train.py`, pip caches and the test tools never reach the final image.
+`Dockerfile.prod` has a `builder` stage that installs the packages and trains the model. The final stage starts from `python:3.12-slim` again and only copies `/opt/venv`, the model and `main.py`.
 
 ```powershell
 docker build -t loan-api:dev -f Dockerfile .
@@ -32,7 +18,7 @@ loan-api:dev    5d8eeb5b7301        589MB          138MB
 loan-api:prod   dd08bf7f34f9        611MB          143MB
 ```
 
-Both images use the slim base. The production image is about the same size as the development one because almost all of the size is the runtime libraries (NumPy, SciPy, scikit-learn) that both need; the difference is in **what** is inside: the production image has no pytest, httpx, training script or tests, and it adds an OS security upgrade layer.
+The two images are almost the same size. Most of the size is numpy, scipy and scikit-learn, which both need. The difference is what is inside: the prod image has no pytest, httpx, train.py or tests.
 
 ## 2. Runs as a non-root user
 
@@ -46,11 +32,9 @@ app
 app
 ```
 
-The image creates a system user `app` and switches to it with `USER app`.
+## 3. Health check in the image
 
-## 3. Health check built into the image
-
-The `HEALTHCHECK` is defined in `Dockerfile.prod` (it calls `/health`), so `compose.yaml` does not need one for `api`; every platform that runs the image gets it.
+The `HEALTHCHECK` is in `Dockerfile.prod`, so I did not add one for `api` in `compose.yaml`.
 
 ```powershell
 docker compose up -d --build
@@ -65,11 +49,11 @@ loan-api-api-1       loan-api-api         "uvicorn main:app --…"   api       4
 loan-api-db-1        postgres:16-alpine   "docker-entrypoint.s…"   db        55 minutes ago   Up 55 minutes (healthy)   5432/tcp
 ```
 
-`api` and `db` are both `(healthy)`; `adminer` is running.
+api and db are both healthy.
 
-## 4. Configuration from environment variables (`MODEL_PATH`)
+## 4. MODEL_PATH from an environment variable
 
-`main.py` reads `MODEL_PATH` (default `model/model.joblib`) and the optional `DATABASE_URL`. The image sets `MODEL_PATH=/app/model/model.joblib`.
+`main.py` reads `MODEL_PATH`, and the image sets it to `/app/model/model.joblib`.
 
 ```powershell
 docker inspect --format '{{json .Config.Env}}' loan-api:prod
@@ -79,7 +63,7 @@ docker inspect --format '{{json .Config.Env}}' loan-api:prod
 ["PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LANG=C.UTF-8","GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305","PYTHON_VERSION=3.12.15","PYTHON_SHA256=c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a","PYTHONDONTWRITEBYTECODE=1","PYTHONUNBUFFERED=1","MODEL_PATH=/app/model/model.joblib"]
 ```
 
-Pointing `MODEL_PATH` at a missing file makes the API refuse to start, which proves the variable is really used:
+To check that the variable is really used, I gave it a path that does not exist. The app does not start:
 
 ```powershell
 docker run --name bad-path -e MODEL_PATH=/app/model/missing.joblib loan-api:prod
@@ -87,6 +71,7 @@ docker run --name bad-path -e MODEL_PATH=/app/model/missing.joblib loan-api:prod
 
 ```
 INFO:     Started server process [1]
+ 
 INFO:     Waiting for application startup.
 ERROR:    Traceback (most recent call last):
   File "/opt/venv/lib/python3.12/site-packages/starlette/routing.py", line 661, in lifespan
@@ -106,11 +91,9 @@ FileNotFoundError: [Errno 2] No such file or directory: '/app/model/missing.jobl
 ERROR:    Application startup failed. Exiting.
 ```
 
-(`GPG_KEY` above is the public key of the official Python image, used to verify the Python download. It is not a secret.)
+(`GPG_KEY` comes from the official Python image. It is a public key, not a secret.)
 
-## 5. Pinned dependencies, no dev tools in the image
-
-Every runtime package has an exact version. Test tools (`pytest`, `httpx`) are only in `requirements-dev.txt`, which the production image never installs.
+## 5. Pinned dependencies
 
 ```powershell
 Get-Content requirements.txt
@@ -125,17 +108,19 @@ numpy==2.2.2
 psycopg[binary]==3.2.4
 ```
 
+pytest and httpx are only in `requirements-dev.txt`. Searching for them in the image gives nothing:
+
 ```powershell
 docker run --rm loan-api:prod pip list | Select-String -Pattern "pytest|httpx"
 ```
 
 ```
-(no output: pytest and httpx are not installed in the production image)
+(no output)
 ```
 
-## 6. No secrets in the image or the repository
+## 6. No secrets in the image or the repo
 
-`.dockerignore` excludes `.git`, `.env`, tests, caches, `compose.yaml`, `init.sql` and documentation, so the image only contains the application:
+`.dockerignore` keeps `.git`, `.env`, tests, caches and the compose/sql files out of the build. Only `main.py` and the model are in `/app`:
 
 ```powershell
 docker run --rm loan-api:prod ls -la /app
@@ -149,17 +134,13 @@ drwxr-xr-x 1 root root 4096 Nov  6 10:18 ..
 drwxr-xr-x 2 root root 4096 Nov  6 10:16 model
 ```
 
-No password, secret or token in any image layer:
-
 ```powershell
 docker history --no-trunc loan-api:prod | Select-String -Pattern "password|secret|token"
 ```
 
 ```
-(no output: nothing found)
+(no output)
 ```
-
-Search of the repository:
 
 ```powershell
 git grep -nIiE "password|secret|token"
@@ -171,40 +152,31 @@ compose.yaml:9:      DATABASE_URL: postgresql://loan:loan_dev_password@db:5432/l
 compose.yaml:18:      POSTGRES_PASSWORD: loan_dev_password   # development only
 ```
 
-The only password is the **development-only** database password in `compose.yaml` (the allowed exception). The README line is just the word "secrets" in a sentence.
+The only password is the development database password in `compose.yaml`, which the task allows. The README line just has the word "secrets".
 
-## 7. Vulnerability scan with Trivy
+## 7. Trivy scan
 
 ```powershell
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --no-progress loan-api:prod
 ```
 
-Result summary:
+Result: Debian packages 49 HIGH, 0 CRITICAL. Python packages 0 HIGH, 0 CRITICAL.
 
-| Target | Type | HIGH | CRITICAL |
-|--------|------|------|----------|
-| loan-api:prod (debian 13.7) | debian | 49 | 0 |
-| Python packages in `/opt/venv` | python-pkg | 0 | 0 |
+### Notes on the findings
 
-### Notes on HIGH / CRITICAL findings
+Fixed: my first scan found 3 HIGH in starlette 0.41.3 (CVE-2025-62727, CVE-2026-48818, CVE-2026-54283). Starlette comes with FastAPI, so I upgraded FastAPI from 0.115.6 to 0.143.0, rebuilt and scanned again. The Python packages now have 0.
 
-**Rebuilt and fixed: Starlette (3 HIGH).** The first scan found CVE-2025-62727, CVE-2026-48818 and CVE-2026-54283 in `starlette 0.41.3`, which came with FastAPI 0.115.6. I upgraded FastAPI to `0.143.0` (it brings a fixed Starlette 1.x), rebuilt the image and scanned again: the Python packages now have **0** HIGH or CRITICAL findings.
+Not fixed yet: the other 49 are all in Debian packages from the `python:3.12-slim` base. Trivy shows no fixed version for any of them (status `affected`, and `fix_deferred` for perl). The image already runs `apt-get upgrade`, so I can only fix them by rebuilding after Debian releases the patches.
 
-**Cannot be fixed yet: Debian OS packages (49 HIGH).** Every remaining finding is in a package of the `python:3.12-slim` base (Debian 13). Trivy lists **no fixed version** for any of them: Debian marks them `affected` (fix not released yet) or `fix_deferred`. The final stage already runs `apt-get update && apt-get upgrade`, so the image has the newest packages Debian publishes. They will be fixed by rebuilding when Debian releases the patches.
+- CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, CVE-2026-78410 - util-linux packages (bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux). No fix yet. These are mount/nsenter tools that the app does not use, and it runs as non-root.
+- CVE-2026-119373, CVE-2026-119374, CVE-2026-119379 - libsqlite3-0. No fix yet. The app uses PostgreSQL, not SQLite.
+- CVE-2026-16742 - libsystemd0, libudev1. No fix yet. It is about systemd-homed, which does not run in a container.
+- CVE-2025-69720 - ncurses (libncursesw6, libtinfo6, ncurses-base). No fix yet. Terminal library, not used by the API.
+- CVE-2026-54369 - libacl1. No fix yet. Needs local symlink access.
+- CVE-2026-76844, CVE-2026-85091 - zlib1g. No fix yet. Python needs zlib so it cannot be removed.
+- CVE-2026-9538 - perl-base. Debian deferred the fix. The app does not use Perl.
 
-| CVE | Packages | Debian status | Why it cannot be fixed yet / risk here |
-|-----|----------|---------------|------------------------------------------|
-| CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, CVE-2026-78410 | util-linux family: bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux | affected | No fix released. These are mount / nsenter tools; the API never calls them and runs as non-root. |
-| CVE-2026-119373, CVE-2026-119374, CVE-2026-119379 | libsqlite3-0 | affected | No fix released. The API does not use SQLite (it uses PostgreSQL). |
-| CVE-2026-16742 | libsystemd0, libudev1 | affected | No fix released. Affects `systemd-homed`, which does not run in a container. |
-| CVE-2025-69720 | libncursesw6, libtinfo6, ncurses-base | affected | No fix released. Terminal library; the API has no interactive terminal. |
-| CVE-2026-54369 | libacl1 | affected | No fix released. Needs local symlink access; the container runs as non-root. |
-| CVE-2026-76844, CVE-2026-85091 | zlib1g | affected | No fix released. Required by Python itself, so it cannot be removed. |
-| CVE-2026-9538 | perl-base | fix_deferred | Debian deferred the fix. Perl's Archive::Tar is never used by the API. |
-
----
-
-## Published image
+## Publish to Docker Hub
 
 ```powershell
 $DOCKER_USER="sovannchakriya"
@@ -214,9 +186,11 @@ docker push $DOCKER_USER/loan-api:1.0.0
 docker push $DOCKER_USER/loan-api:latest
 ```
 
-Docker Hub: https://hub.docker.com/r/sovannchakriya/loan-api/tags (both `1.0.0` and `latest` listed)
+Both tags are on https://hub.docker.com/r/sovannchakriya/loan-api/tags
 
-## Pull and run from the registry (no local files)
+## Run from Docker Hub
+
+I deleted the local images and ran the one from Docker Hub:
 
 ```powershell
 docker compose down
@@ -224,7 +198,7 @@ docker rmi $DOCKER_USER/loan-api:1.0.0 $DOCKER_USER/loan-api:latest loan-api:pro
 docker run --rm -p 8000:8000 $DOCKER_USER/loan-api:1.0.0
 ```
 
-`POST /predict` with this body answers **200**:
+Then I sent this to `POST /predict` in `/docs` and got 200:
 
 ```json
 {
@@ -236,5 +210,4 @@ docker run --rm -p 8000:8000 $DOCKER_USER/loan-api:1.0.0
 }
 ```
 
-
-![/docs showing the 200 response](screenshots/docs-200.png)
+![200 response in /docs](screenshots/docs-200.png)

@@ -1,51 +1,35 @@
 # Loan Prediction API
 
-A **FastAPI** service that predicts whether a loan application should be approved, using a **scikit-learn** model.
-It is packaged as a **production-ready Docker image**, runs with **Docker Compose** next to PostgreSQL, and is published on **Docker Hub**.
+A small FastAPI app that predicts if a loan should be approved. The model is a scikit-learn logistic regression trained on generated data. I packaged it with Docker for the Docker module: there is a production image, a Compose setup with PostgreSQL, and the image is on Docker Hub.
 
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.143-009688?logo=fastapi&logoColor=white)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-1.6-F7931E?logo=scikitlearn&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-multi--stage-2496ED?logo=docker&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+## How to run
 
----
-
-## Quick start
-
-### Run the published image (no local files needed)
+Run the image from Docker Hub (no files needed):
 
 ```bash
 docker run --rm -p 8000:8000 sovannchakriya/loan-api:1.0.0
 ```
 
-Open **http://localhost:8000/docs**.
+Then open http://localhost:8000/docs.
 
-### Run the full stack with Compose
+Or run everything with Compose (api, PostgreSQL and Adminer):
 
 ```bash
 docker compose up -d --build
-docker compose ps        # api and db show (healthy)
+docker compose ps
 ```
 
-| Service   | URL                          | Purpose                          |
-|-----------|------------------------------|----------------------------------|
-| `api`     | http://localhost:8000/docs   | Loan prediction API              |
-| `db`      | `localhost:5432` (internal)  | PostgreSQL, stores predictions   |
-| `adminer` | http://localhost:8080        | Web UI to browse the database    |
+- API docs: http://localhost:8000/docs
+- Adminer (to look at the database): http://localhost:8080
 
-Stop everything with `docker compose down`.
+Stop it with `docker compose down`.
 
----
+## Endpoints
 
-## API
+- `GET /health` - returns the status, the Docker health check uses this
+- `POST /predict` - returns `approved` and `probability` for one application
 
-| Method | Path       | Description                                   |
-|--------|------------|-----------------------------------------------|
-| `GET`  | `/health`  | Health status, used by the Docker `HEALTHCHECK` |
-| `POST` | `/predict` | Predicts approval for one loan application    |
-
-**Example request body**
+Example body for `/predict`:
 
 ```json
 {
@@ -57,15 +41,7 @@ Stop everything with `docker compose down`.
 }
 ```
 
-Send it with curl:
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"income": 3000, "loan_amount": 2000, "credit_score": 780, "years_employed": 10, "has_default": false}'
-```
-
-**Example response**
+Answer:
 
 ```json
 {
@@ -74,58 +50,28 @@ curl -X POST http://localhost:8000/predict \
 }
 ```
 
-| Field            | Type    | Rule                     |
-|------------------|---------|--------------------------|
-| `income`         | number  | monthly income in USD, > 0 |
-| `loan_amount`    | number  | loan in USD, > 0         |
-| `credit_score`   | integer | 300 – 850                |
-| `years_employed` | integer | 0 – 60                   |
-| `has_default`    | boolean | defaulted before?        |
+`income` and `loan_amount` must be more than 0, `credit_score` is 300 to 850 and `years_employed` is 0 to 60. Wrong values give a 422.
 
-Invalid values return **422**.
+## Settings
 
----
+- `MODEL_PATH` - where the model file is. In the image it is `/app/model/model.joblib`.
+- `DATABASE_URL` - optional. If it is set (Compose sets it), each prediction is saved in the `predictions` table.
 
-## Configuration
+## About the production image
 
-| Variable       | Default                    | Description                                         |
-|----------------|----------------------------|-----------------------------------------------------|
-| `MODEL_PATH`   | `/app/model/model.joblib`  | Where the API loads the model from                  |
-| `DATABASE_URL` | _not set_                  | Optional. When set, each prediction is saved to PostgreSQL |
+`Dockerfile.prod` uses two stages. The first stage installs the packages and trains the model, the second one only copies the virtual environment, the model and `main.py` into `python:3.12-slim`. It runs as a non-root user (`app`) and has a `HEALTHCHECK` that calls `/health`. The proof for each requirement is in [CHECKLIST.md](CHECKLIST.md).
 
----
+## Files
 
-## Production image
-
-`Dockerfile.prod` is built for production:
-
-- **Multi-stage build**: dependencies are installed and the model is trained in a `builder` stage; only the result is copied into the final image.
-- **Slim base**: `python:3.12-slim`, with OS packages upgraded.
-- **Non-root user**: runs as `app`.
-- **Built-in `HEALTHCHECK`**: calls `/health`, so every platform that runs the image gets it.
-- **Pinned dependencies** and a strict `.dockerignore`, so no tests, caches or secrets go into the image.
-
-Evidence for each requirement is in [`CHECKLIST.md`](CHECKLIST.md).
-
----
-
-## Project structure
-
-```
-loan-api/
-├── main.py              # FastAPI app (reads MODEL_PATH)
-├── train.py             # trains the model during the image build
-├── Dockerfile           # development image (auto-reload)
-├── Dockerfile.prod      # production image
-├── compose.yaml         # api + db + adminer
-├── init.sql             # creates the predictions table
-├── requirements.txt     # runtime dependencies (pinned)
-├── requirements-dev.txt # + pytest, httpx
-├── tests/test_main.py   # API tests
-└── CHECKLIST.md         # evidence for each requirement
-```
-
----
+- `main.py` - the API
+- `train.py` - trains the model (runs during the image build)
+- `Dockerfile` - image for development (auto reload)
+- `Dockerfile.prod` - image for production
+- `compose.yaml` - api, db and adminer
+- `init.sql` - creates the `predictions` table
+- `requirements.txt` / `requirements-dev.txt` - packages (dev adds pytest and httpx)
+- `tests/test_main.py` - tests
+- `collect-evidence.ps1` - script I used to run the checklist commands
 
 ## Tests
 
@@ -133,6 +79,3 @@ loan-api/
 pip install -r requirements-dev.txt
 pytest
 ```
-
----
-
