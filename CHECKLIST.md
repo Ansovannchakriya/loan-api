@@ -198,6 +198,22 @@ docker rmi $DOCKER_USER/loan-api:1.0.0 $DOCKER_USER/loan-api:latest loan-api:pro
 docker run --rm -p 8000:8000 $DOCKER_USER/loan-api:1.0.0
 ```
 
+```
+Unable to find image 'sovannchakriya/loan-api:1.0.0' locally
+1.0.0: Pulling from sovannchakriya/loan-api
+44136fa355b3: Already exists
+5332167ce62a: Download complete
+Digest: sha256:dd08bf7f34f9077f4c3ef3d4b381a6b8ba860c7362330074285d609a918f3bb1
+Status: Downloaded newer image for sovannchakriya/loan-api:1.0.0
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:42214 - "GET /health HTTP/1.1" 200 OK
+```
+
+The digest `dd08bf7f34f9` is the same ID as the `loan-api:prod` image I checked above, so the image on Docker Hub is the one that passed the checks. The `GET /health` lines are the health check.
+
 Then I sent this to `POST /predict` in `/docs` and got 200:
 
 ```json
